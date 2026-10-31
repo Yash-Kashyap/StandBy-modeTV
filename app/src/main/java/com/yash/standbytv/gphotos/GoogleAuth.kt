@@ -57,7 +57,8 @@ object GoogleAuth {
 
     /** Call from onActivityResult. Returns null on success, or an error message. */
     fun handleResult(activity: Activity, resultCode: Int, data: Intent?): String? {
-        if (resultCode != Activity.RESULT_OK || data == null) return "Sign-in was cancelled"
+        if (data == null) return "Sign-in was cancelled"
+        // Even when Google's screen closes with an error, the intent carries the reason.
         return try {
             val r = Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(data)
             if (save(activity, r)) null else "Google returned no access"
@@ -67,6 +68,9 @@ object GoogleAuth {
     private fun explain(e: Exception): String {
         val m = e.message ?: e.javaClass.simpleName
         return when {
+            m.contains("28405") || m.contains("INVALID_SCOPE", true) ->
+                "Google refused the Google Photos permission.\nIn Google Cloud: enable \"Photos Picker API\" in the SAME\nproject as the Android client, then wait 5 minutes.\n(Error: invalid scope)"
+
             m.contains("10:") || m.contains("DEVELOPER_ERROR") ->
                 "Google doesn't recognise this app yet.\nCreate an \"Android\" OAuth client for com.yash.standbytv\nwith this APK's SHA-1 (see README)."
             m.contains("7:") || m.contains("NETWORK") -> "No internet connection"

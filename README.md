@@ -222,6 +222,7 @@ adb uninstall com.yash.standbytv
 | Now Playing says **"Allow StandBy TV to see what's playing"** | Do step 4, then `adb shell am force-stop com.yash.standbytv` |
 | Now Playing shows **"Nothing playing"** | Start music in Spotify, YouTube Music or YouTube **on the TV** (casting to the TV counts too). Music playing only on a phone isn't visible |
 | **Weather unavailable** | Check the TV's internet. Or set a city in Settings → Location |
+| Google sign-in says **"Google refused the Google Photos permission" (invalid scope)** | Open the project that holds your **Android** client → APIs & Services → **Enabled APIs**. **Photos Picker API** must be listed; if not, enable it. Also check the scope is added under Data access. Wait about 5 minutes after any change, then try again |
 | Google sign-in says **"Google doesn't recognise this app yet"** | The Android OAuth client is missing, or its SHA-1 or package name doesn't match. See [Google Cloud setup](#one-time-google-cloud-setup-about-10-minutes-free), step 6 |
 | Google sign-in says **"Access blocked" / "app not verified"** | Add the Gmail as a **Test user** (step 4), or publish the app and choose *Advanced → Go to StandBy TV* |
 | **No Google account** on the TV | Add one under the TV's Settings → Accounts (the same one the Play Store uses) |
