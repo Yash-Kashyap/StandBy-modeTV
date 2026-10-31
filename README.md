@@ -55,29 +55,32 @@ On the Now Playing screen, press **OK** to show the controls. Use ◀ ▶ to pic
 ## Google Photos slideshow
 Since March 2025, Google no longer lets any app browse your library or list your albums. The only official option is the **Google Photos Picker**, so it works like this:
 
-1. Settings → **Google Photos albums** → **Sign in with Google**. Scan the QR code with your phone and approve.
+1. Once only: [create your free Google client](#one-time-google-cloud-setup-about-10-minutes-free) and paste it into the TV from your phone. Then Settings → **Google Photos albums** → **Sign in with Google**, scan the QR code and approve.
 2. **＋ New album**: name it, for example "Goa trip". Scan the QR code. Google Photos opens on your phone. Pick photos, or **search an album's name, select all**, and tap **Done**.
 3. The TV downloads them once (up to 600 per pick, at TV resolution). They then play offline in the **Photos** screen.
 4. Each album can be **shown or hidden**, **renamed**, **deleted**, or have **more photos added**. Settings → **Slideshow source** chooses between Google Photos, TV storage, or both.
 
 StandBy TV can only ever see the photos you pick.
 
-### One-time Google Cloud setup (needed before building)
-Google requires each app to have its own sign-in client:
-1. Go to <https://console.cloud.google.com>, create a project (e.g. "StandBy TV"), then **APIs & Services → Library → enable "Photos Picker API"**.
-2. Set up the **OAuth consent screen** (Google Auth Platform): choose External, give the app a name, and enter your email. Add the scope `.../auth/photospicker.mediaitems.readonly`. Under **Audience**, add your Gmail as a test user.
-   *While the app is in "Testing", Google ends sign-ins after 7 days. Your downloaded albums keep playing, but you'd have to sign in again to add more. To avoid that, click **Publish app**. You'll see a "Google hasn't verified this app" warning when signing in; choose Advanced → Continue. That's fine for personal use.*
-3. **Credentials → Create credentials → OAuth client ID → Application type: "TVs and Limited Input devices"**. Copy the Client ID and Client secret.
-4. Add them to `local.properties` in the project folder:
-   ```
-   google.clientId=1234567890-xxxx.apps.googleusercontent.com
-   google.clientSecret=GOCSPX-xxxx
-   ```
-5. Rebuild (`./gradlew assembleRelease`). Without these values, the Google Photos page shows "Setup needed" and everything else still works.
+### One-time Google Cloud setup (about 10 minutes, free)
+Google needs a sign-in "client" that belongs to you. You create it once, then paste it into the TV from your phone. **No rebuilding needed.**
 
-Weather comes from **Open-Meteo**, which is free and needs no API key. Automatic location uses ipwho.is, with ipapi.co as a fallback.
+1. Go to <https://console.cloud.google.com> → **Select a project → New project**, name it e.g. "StandBy TV", and **Create**.
+2. **APIs & Services → Library**: search for **Photos Picker API** and **Enable** it.
+3. **Google Auth Platform** (also called OAuth consent screen) → **Get started**:
+   - App name: `StandBy TV`, and your email as support and contact email
+   - Audience: **External**
+   - Agree and **Create**
+4. **Audience → Test users → Add users**: add the Gmail whose photos you want to show.
+   *While the app is in "Testing", Google ends sign-ins after 7 days. Albums you already downloaded keep playing, but adding new ones means signing in again. To avoid that, choose **Publish app** on the same page. You'll then see "Google hasn't verified this app" when signing in; choose **Advanced → Go to StandBy TV**. That's fine for personal use.*
+5. **Data access → Add or remove scopes**: paste `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` under *Manually add scopes*, then **Add to table → Update → Save**.
+6. **Clients → Create client** → Application type **TVs and Limited Input devices** → **Create**. Keep the **Client ID** and **Client secret** it shows.
+7. On the TV: StandBy TV → Settings → **Google Photos albums** → **Connect Google Photos**. A QR code appears. Scan it with your phone, or open the address shown on a PC on the **same Wi-Fi**. Paste the Client ID and secret, and tap **Save to TV**.
+8. Back on the TV, choose **Sign in with Google**, scan the QR, approve, and then add albums.
 
----
+Each TV keeps its own client. You can use the same client on all your TVs. "Change Google client" and "Remove Google client" are on the same TV page.
+
+*Building the app yourself?* You can also build a client in: add `google.clientId=…` and `google.clientSecret=…` to `local.properties` and rebuild. A client entered on the TV always takes priority. Don't publish an APK with your secret built in.
 
 ## Setting it up on your TV
 
@@ -213,7 +216,9 @@ adb uninstall com.yash.standbytv
 | Now Playing says **"Allow StandBy TV to see what's playing"** | Do step 4, then `adb shell am force-stop com.yash.standbytv` |
 | Now Playing shows **"Nothing playing"** | Start music in Spotify, YouTube Music or YouTube **on the TV** (casting to the TV counts too). Music playing only on a phone isn't visible |
 | **Weather unavailable** | Check the TV's internet. Or set a city in Settings → Location |
-| Google Photos shows **"Setup needed"** | That build has no Google client ID. See [Google Cloud setup](#one-time-google-cloud-setup-needed-before-building) |
+| Google Photos asks to **Connect Google Photos** | Create your free Google client once, then paste it from your phone. See [Google Cloud setup](#one-time-google-cloud-setup-about-10-minutes-free) |
+| The setup QR page **won't open** on the phone | The phone must be on the **same Wi-Fi** as the TV (not mobile data, and not a guest network). Or open the address shown on the TV from a PC |
+| Google sign-in says **"Access blocked" / "app not verified"** | Add your Gmail as a **Test user** (step 4), or publish the app and choose *Advanced → Go to StandBy TV* |
 
 ## Build it yourself
 Open the folder in Android Studio, or run:
@@ -245,7 +250,7 @@ app/src/main/java/com/yash/standbytv/
   BootReceiver.kt      optional "open on TV start"
   MediaListener.kt     lets Now Playing see media sessions
   GPhotosActivity.kt   Google Photos sign-in, QR picker, albums
-  gphotos/             GoogleAuth (TV sign-in), GPhotos (Picker API + local albums), Http
+  gphotos/             GoogleAuth (TV sign-in), GPhotos (Picker API + local albums), SetupServer (phone/PC setup page), Http
   TvUi.kt              shared rows with focus border, QR code drawing
   faces/               each screen is a Canvas View (Face.kt is the base class, Draw.kt has shared drawing code)
 ```

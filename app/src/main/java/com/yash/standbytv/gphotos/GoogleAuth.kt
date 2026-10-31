@@ -15,9 +15,24 @@ object GoogleAuth {
     private const val DEVICE_URL = "https://oauth2.googleapis.com/device/code"
     private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-    val clientId: String get() = BuildConfig.GOOGLE_CLIENT_ID
-    val clientSecret: String get() = BuildConfig.GOOGLE_CLIENT_SECRET
-    val configured: Boolean get() = clientId.isNotBlank() && clientSecret.isNotBlank()
+    // Client entered on the TV (via phone/PC web form) wins; a client built into the APK is the fallback.
+    fun clientId(ctx: Context): String =
+        Prefs(ctx).sp.getString("g_client_id", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.GOOGLE_CLIENT_ID
+    fun clientSecret(ctx: Context): String =
+        Prefs(ctx).sp.getString("g_client_secret", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.GOOGLE_CLIENT_SECRET
+    fun configured(ctx: Context): Boolean = clientId(ctx).isNotBlank() && clientSecret(ctx).isNotBlank()
+
+    /** Saves a client typed on a phone/PC. Changing it signs out of the old one. */
+    fun saveClient(ctx: Context, id: String, secret: String) {
+        val sp = Prefs(ctx).sp
+        if (sp.getString("g_client_id", null) != id) sp.edit().remove("g_refresh").remove("g_access").remove("g_exp").apply()
+        sp.edit().putString("g_client_id", id.trim()).putString("g_client_secret", secret.trim()).apply()
+    }
+
+    fun clearClient(ctx: Context) {
+        Prefs(ctx).sp.edit().remove("g_client_id").remove("g_client_secret")
+            .remove("g_refresh").remove("g_access").remove("g_exp").apply()
+    }
 
     class DeviceCode(val deviceCode: String, val userCode: String, val verifyUrl: String, val intervalSec: Int, val expiresAt: Long)
 
@@ -39,8 +54,8 @@ object GoogleAuth {
     }
 
     /** Step 1 (background thread): ask Google for a code to show on the TV. */
-    fun requestDeviceCode(): DeviceCode {
-        val r = Http.request(DEVICE_URL, "POST", Http.form("client_id" to clientId, "scope" to SCOPE), "application/x-www-form-urlencoded")
+    fun requestDeviceCode(ctx: Context): DeviceCode {
+        val r = Http.request(DEVICE_URL, "POST", Http.form("client_id" to clientId(ctx), "scope" to SCOPE), "application/x-www-form-urlencoded")
         val j = JSONObject(r.body)
         if (!r.ok) error(j.optString("error_description", j.optString("error", "HTTP ${r.code}")))
         return DeviceCode(
@@ -53,7 +68,7 @@ object GoogleAuth {
     /** Step 2 (background thread): poll until the user approves on their phone. */
     fun poll(ctx: Context, dc: DeviceCode): Poll {
         val r = Http.request(TOKEN_URL, "POST", Http.form(
-            "client_id" to clientId, "client_secret" to clientSecret, "device_code" to dc.deviceCode,
+            "client_id" to clientId(ctx), "client_secret" to clientSecret(ctx), "device_code" to dc.deviceCode,
             "grant_type" to "urn:ietf:params:oauth:grant-type:device_code"
         ), "application/x-www-form-urlencoded")
         val j = runCatching { JSONObject(r.body) }.getOrDefault(JSONObject())
@@ -82,7 +97,7 @@ object GoogleAuth {
         if (tok != null && System.currentTimeMillis() < sp.getLong("g_exp", 0)) return tok
         val refresh = sp.getString("g_refresh", null) ?: error("Not signed in")
         val r = Http.request(TOKEN_URL, "POST", Http.form(
-            "client_id" to clientId, "client_secret" to clientSecret,
+            "client_id" to clientId(ctx), "client_secret" to clientSecret(ctx),
             "refresh_token" to refresh, "grant_type" to "refresh_token"
         ), "application/x-www-form-urlencoded")
         val j = JSONObject(r.body)
