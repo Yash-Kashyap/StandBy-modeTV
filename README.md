@@ -4,6 +4,8 @@
 
 An iOS-StandBy-style clock and widget screen for **Android TV 8.0+**. You can open it as an app or set it as the TV's screensaver.
 
+**[⬇ Download the APK](apk/StandBy-TV.apk)** · **[Set it up on your TV](#setting-it-up-on-your-tv)** · **[Troubleshooting](#troubleshooting)**
+
 **Package:** `com.yash.standbytv` · **minSdk:** 26 (Android 8.0) · **APK size:** about 160 KB · **No ads, no tracking**. The only library is ZXing, which draws the QR codes
 
 ---
@@ -47,13 +49,7 @@ Use **◀ ▶** to move between screens and **▲ ▼** to change a screen's sty
 ## Now Playing (Spotify / YouTube Music)
 This screen shows whatever is playing **on the TV**, from any app that uses Android's standard media controls: Spotify, YouTube Music, YouTube, Prime Video and so on. It also works when you cast to the TV.
 
-Android needs you to allow this once. Go to Settings → **Music controls access**. Most Android TVs hide that setting, so you'll probably need to run this from your PC:
-```
-adb connect <TV-IP>
-adb shell cmd notification allow_listener com.yash.standbytv/com.yash.standbytv.MediaListener
-# Android 8.0 only:
-adb shell settings put secure enabled_notification_listeners com.yash.standbytv/com.yash.standbytv.MediaListener
-```
+Android needs you to allow this once. The [setup script](#quick-setup-recommended) does it for you. To do it by hand, see [step 4 of manual setup](#4-allow-the-now-playing-music-screen).
 On the Now Playing screen, press **OK** to show the controls. Use ◀ ▶ to pick ⏮ ⏯ ⏭, OK to press it, and BACK to hide them. Media buttons on the remote also work.
 
 ## Google Photos slideshow
@@ -83,25 +79,141 @@ Weather comes from **Open-Meteo**, which is free and needs no API key. Automatic
 
 ---
 
-## Install on the TV
+## Setting it up on your TV
 
-1. Copy `StandBy-TV.apk` to a USB drive, or send it with LocalSend / "Send files to TV".
-2. Open it with a file manager on the TV and allow "Install unknown apps" if asked.
-   Or use ADB: `adb connect <TV-IP>` then `adb install StandBy-TV.apk`
-3. StandBy TV appears in the TV's app row with its banner.
+You need the TV, and a Windows, Mac or Linux computer on the **same Wi-Fi**.
 
-## Set it as the screensaver
-Go to Settings → **Set as TV screensaver**. This opens the TV's own screensaver picker if it has one.
+### 1. Turn on developer mode on the TV (one time)
+1. Open the TV's **Settings → Device Preferences → About**. On Google TV it's **Settings → System → About**.
+2. Select **Build** (or **Android TV OS build**) **7 times**, until it says you're a developer.
+3. Go back to **Device Preferences → Developer options** and turn on **USB debugging**. If you also see **Network debugging** or **ADB debugging over network**, turn that on too.
+4. Find the TV's IP address under **Settings → Network & Internet → (your Wi-Fi)**, for example `192.168.1.9`.
 
-Xiaomi Mi TV (PatchWall) and some other TVs hide that picker. In that case, run this from your PC:
+### 2. Install ADB on your computer (one time)
+| Computer | Command |
+|---|---|
+| Windows | `winget install Google.PlatformTools`, then open a **new** PowerShell window |
+| macOS | `brew install android-platform-tools` |
+| Ubuntu / Debian | `sudo apt install adb` |
 
+### Quick setup (recommended)
+Download or clone this repo, then run **one** command from its folder, using your TV's IP:
+
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\setup-tv.ps1 -TvIp 192.168.1.9
 ```
-adb connect <TV-IP>
-adb shell settings put secure screensaver_components com.yash.standbytv/.StandbyDream
+**macOS / Linux:**
+```bash
+./tools/setup-tv.sh 192.168.1.9
+```
+The first time, the TV shows **"Allow USB debugging?"**. Tick **Always allow from this computer**, choose **OK**, and run the command again.
+
+The script:
+1. installs the app (the APK in [`apk/`](apk/)),
+2. allows the **Now Playing** music screen,
+3. sets StandBy TV as the **screensaver**, starting after **5 minutes** idle,
+4. makes the TV wait **4 hours** before switching itself off, so it doesn't just sleep at 5 minutes,
+5. checks every setting and starts the screensaver once as a test.
+
+Options:
+- Windows: `-IdleMinutes 6`, `-SleepHours 0` (never switch off), `-SkipInstall`
+- Mac/Linux: `./tools/setup-tv.sh <ip> <idle-minutes> <sleep-hours>`
+
+It's safe to run again at any time, for example after updating the app.
+
+### Manual setup (same steps, one at a time)
+```bash
+adb connect 192.168.1.9
+```
+Accept the prompt on the TV, then:
+
+#### 3. Install
+```bash
+adb install -r StandBy-TV.apk
+```
+Installing with ADB avoids the Play Protect block described under Troubleshooting.
+
+#### 4. Allow the Now Playing music screen
+```bash
+adb shell cmd notification allow_listener com.yash.standbytv/com.yash.standbytv.MediaListener
+adb shell settings get secure enabled_notification_listeners
+```
+If the second command doesn't list `com.yash.standbytv/...MediaListener` (some TVs, Xiaomi included, ignore the first command), add it yourself. Put whatever the TV already lists **first**, add `:` and our entry, so nothing else breaks:
+```bash
+adb shell settings put secure enabled_notification_listeners "<what it listed>:com.yash.standbytv/com.yash.standbytv.MediaListener"
+```
+If it listed `null`, use just `com.yash.standbytv/com.yash.standbytv.MediaListener`. Then restart the app with `adb shell am force-stop com.yash.standbytv`.
+
+#### 5. Make it the screensaver
+```bash
 adb shell settings put secure screensaver_enabled 1
+adb shell settings put secure screensaver_activate_on_sleep 1
+adb shell settings put secure screensaver_components com.yash.standbytv/.StandbyDream
+adb shell settings put system screen_off_timeout 300000     # start after 5 min (360000 = 6 min)
+adb shell settings put secure sleep_timeout 14400000        # TV turns off after 4 h (0 = never)
+```
+> ⚠️ **`sleep_timeout` matters.** Many TVs ship with it equal to the screensaver delay (for example both 5 minutes). Then the TV goes to sleep at the same moment the screensaver should start, and you never see it. It must be **longer** than `screen_off_timeout`.
+
+Some TVs show the picker under **Settings → Device Preferences → Screen saver**. There you can choose StandBy TV directly, or use StandBy TV → Settings → **Set as TV screensaver**.
+
+#### 6. Test it
+```bash
+adb shell am start -n com.android.systemui/.Somnambulator
+```
+StandBy TV should appear straight away, and any remote button closes it. After that, leaving the TV idle on the home screen for the set time starts it by itself.
+
+#### Check everything
+```bash
+adb shell settings get secure screensaver_components     # com.yash.standbytv/.StandbyDream
+adb shell settings get secure screensaver_enabled        # 1
+adb shell settings get secure screensaver_activate_on_sleep   # 1
+adb shell settings get system screen_off_timeout         # e.g. 300000
+adb shell settings get secure sleep_timeout              # larger than the line above, or 0
+adb shell settings get secure enabled_notification_listeners  # contains com.yash.standbytv
+```
+
+### Device notes
+| Device | Notes |
+|---|---|
+| **Xiaomi Mi TV / Mi Box** (PatchWall or Android TV) | Tested. Needs the music-access fallback in step 4 and the `sleep_timeout` fix |
+| **Sony, Philips, TCL, OnePlus, Hisense** (Android TV / Google TV) | Same steps. Developer options are under Settings → System → About on Google TV |
+| **Chromecast with Google TV / Google TV Streamer** | The menus may not list third-party screensavers. The ADB commands in step 5 still set it |
+| **Amazon Fire TV** | The app installs and runs, but Fire OS doesn't reliably allow a third-party screensaver. Open the app from the Apps row instead |
+| **Projectors / Android boxes** | Same as Android TV. Works on Android 8.0 and newer |
+
+### What the screensaver won't do (by design of Android)
+- It won't start while a **video is playing**: YouTube, Netflix and similar apps keep the TV awake.
+- It won't start while **StandBy TV itself is open**, because it's already on screen.
+- It won't start on **live TV / HDMI inputs** on some TVs, because those count as "watching".
+
+### Optional: grant photo access without the pop-up
+```bash
+adb shell pm grant com.yash.standbytv android.permission.READ_EXTERNAL_STORAGE
+```
+
+### Undo / uninstall
+```bash
+adb shell settings delete secure screensaver_components   # back to the TV's default screensaver
+adb uninstall com.yash.standbytv
 ```
 
 ---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| **"App blocked to protect your device"** (Google Play Protect) when installing from a USB drive or file manager | In some countries, including India, Play Protect blocks sideloaded apps that request notification access. StandBy TV asks for it only for the music screen. **Install with ADB** (`adb install` or the setup script), which isn't blocked. Or temporarily turn off Play Store → profile/Settings → Play Protect → *Scan apps with Play Protect*, install, then turn it back on |
+| `adb connect` says **failed / refused** | Turn on USB debugging (and Network debugging, if listed), and check the TV and computer are on the same Wi-Fi. Some TVs need a restart after enabling debugging |
+| `adb` says **unauthorized** | Accept the "Allow USB debugging?" pop-up on the TV with *Always allow* ticked, then run `adb connect` again |
+| **device '…:5555' not found** later on | The TV went to sleep or restarted. Run `adb connect <ip>` again. Give the TV a fixed IP in your router so it doesn't change |
+| Screensaver **never starts** | `sleep_timeout` is probably not longer than `screen_off_timeout` (step 5). Also check nothing is playing |
+| The **TV maker's own screensaver** appears instead | Re-run step 5. Some launchers reset `screensaver_components` after an update |
+| Now Playing says **"Allow StandBy TV to see what's playing"** | Do step 4, then `adb shell am force-stop com.yash.standbytv` |
+| Now Playing shows **"Nothing playing"** | Start music in Spotify, YouTube Music or YouTube **on the TV** (casting to the TV counts too). Music playing only on a phone isn't visible |
+| **Weather unavailable** | Check the TV's internet. Or set a city in Settings → Location |
+| Google Photos shows **"Setup needed"** | That build has no Google client ID. See [Google Cloud setup](#one-time-google-cloud-setup-needed-before-building) |
 
 ## Build it yourself
 Open the folder in Android Studio, or run:
@@ -120,6 +232,9 @@ To preview every screen as a PNG without a TV:
 
 ### Code map
 ```
+apk/StandBy-TV.apk     ready-to-install build
+tools/setup-tv.ps1     one-step TV setup for Windows (install + music access + screensaver)
+tools/setup-tv.sh      the same for macOS / Linux
 app/src/main/java/com/yash/standbytv/
   MainActivity.kt      full-screen app, keeps the screen on, sends remote keys to StandbyView
   StandbyDream.kt      screensaver (DreamService)
