@@ -21,7 +21,6 @@ import android.widget.Toast
 import com.yash.standbytv.faces.Face
 import com.yash.standbytv.gphotos.GPhotos
 import com.yash.standbytv.gphotos.GoogleAuth
-import com.yash.standbytv.gphotos.SetupServer
 import kotlin.concurrent.thread
 
 /**
@@ -80,37 +79,17 @@ class GPhotosActivity : Activity() {
         build()
     }
 
-    private var setupServer: SetupServer? = null
+    override fun onDestroy() { job++; super.onDestroy() }
 
-    override fun onDestroy() { job++; stopSetup(); super.onDestroy() }
-
-    private fun stopSetup() { setupServer?.stop(); setupServer = null }
-
-    /** Shows a QR that opens a form on your phone/PC to paste the Google client ID + secret. */
-    private fun showClientSetup() {
-        job++
-        stopSetup()
-        val srv = SetupServer { id, secret ->
-            main.post {
-                GoogleAuth.saveClient(this, id, secret)
-                stopSetup()
-                panel(null, "Saved ✓", "Now choose Sign in with Google.")
-                build()
-            }
-        }
-        val url = runCatching { srv.start() }.getOrNull()
-        if (url == null) {
-            panel(null, "No network", "Connect the TV to Wi-Fi or Ethernet, then try again.")
-            return
-        }
-        setupServer = srv
-        panel(url, "Connect Google Photos",
-            "Scan with your phone (same Wi-Fi as the TV)\nor open on your PC:\n$url\n\n" +
-                "Paste your Google OAuth Client ID and secret there.\nHow to create them: see the README.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != GoogleAuth.REQUEST_CODE) return
+        val err = GoogleAuth.handleResult(this, resultCode, data)
+        if (err == null) { panel(null, "Signed in ✓", ""); build() } else panel(null, "", err)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && qr.visibility == View.VISIBLE && setupServer == null) { job++; panel(null, "", "Cancelled."); return true }
+        if (keyCode == KeyEvent.KEYCODE_BACK && qr.visibility == View.VISIBLE) { job++; panel(null, "", "Cancelled."); return true }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -123,18 +102,12 @@ class GPhotosActivity : Activity() {
 
     private fun build() {
         list.removeAllViews()
-        if (!GoogleAuth.configured(this)) {
-            TvUi.section(list, "One-time setup")
-            TvUi.row(list, "Connect Google Photos", "") { showClientSetup() }.parent.let { (it as View).requestFocus() }
-            TvUi.row(list, "Back", "") { finish() }
-            if (setupServer == null) showClientSetup()
-            return
-        }
         if (!GoogleAuth.isSignedIn(this)) {
             TvUi.section(list, "Account")
             TvUi.row(list, "Sign in with Google", "") { signIn() }.parent.let { (it as View).requestFocus() }
-            TvUi.row(list, "Change Google client", "") { showClientSetup() }
-            panel(null, "", "Sign in once to choose photos and albums\nfrom your Google Photos.\n\nStandBy TV can only see the photos you pick.")
+            TvUi.row(list, "Back", "") { finish() }
+            if (big.text.isEmpty() && info.text.isEmpty())
+                panel(null, "", "Sign in with the Google account on this TV\nto choose photos and albums from Google Photos.\n\nStandBy TV can only see the photos you pick.")
             return
         }
         TvUi.section(list, "Albums")
@@ -143,46 +116,20 @@ class GPhotosActivity : Activity() {
             TvUi.row(list, a.name, "${a.count} photos · ${if (a.enabled) "Shown" else "Hidden"}") { albumMenu(a) }
         }
         TvUi.section(list, "Account")
-        TvUi.row(list, "Sign out of Google", "") {
-            GoogleAuth.signOut(this); build()
-        }
-        TvUi.row(list, "Remove Google client", "") {
-            GoogleAuth.signOut(this); GoogleAuth.clearClient(this); panel(null, "", ""); build()
-        }
+        TvUi.row(list, "Sign out of Google", "") { GoogleAuth.signOut(this); panel(null, "", ""); build() }
         (addRow.parent as View).requestFocus()
         if (qr.visibility != View.VISIBLE && big.text.isEmpty()) panel(null, "", "Pick photos on your phone and they'll play\nin the Photos screen of StandBy TV.")
     }
 
     // ------------------------------------------------------------------ sign-in
 
+    /** Uses the Google account already on the TV; Google shows its own account + consent screen. */
     private fun signIn() {
-        stopSetup()
-        val my = ++job
-        panel(null, "", "Getting a sign-in code…")
-        thread {
-            try {
-                val dc = GoogleAuth.requestDeviceCode(this)
-                main.post {
-                    if (my != job) return@post
-                    panel(dc.verifyUrl, dc.userCode,
-                        "Scan the code, or open ${dc.verifyUrl.removePrefix("https://")}\non your phone and enter the code above.")
-                }
-                var wait = dc.intervalSec * 1000L
-                while (my == job && System.currentTimeMillis() < dc.expiresAt) {
-                    Thread.sleep(wait)
-                    if (my != job) return@thread
-                    when (val r = GoogleAuth.poll(this, dc)) {
-                        GoogleAuth.Poll.Pending -> {}
-                        GoogleAuth.Poll.SlowDown -> wait += 5000
-                        GoogleAuth.Poll.Done -> { main.post { if (my == job) { panel(null, "Signed in ✓", ""); build() } }; return@thread }
-                        is GoogleAuth.Poll.Failed -> { main.post { panel(null, "", r.reason) }; return@thread }
-                    }
-                }
-                main.post { if (my == job) panel(null, "", "The code expired. Choose Sign in again.") }
-            } catch (t: Throwable) {
-                main.post { if (my == job) panel(null, "", "Couldn't start sign-in:\n${t.message}") }
-            }
-        }
+        job++
+        panel(null, "", "Opening Google sign-in…")
+        GoogleAuth.signIn(this,
+            onDone = { panel(null, "Signed in ✓", ""); build() },
+            onError = { msg -> panel(null, "Couldn't sign in", msg) })
     }
 
     // ------------------------------------------------------------------ albums
@@ -223,7 +170,6 @@ class GPhotosActivity : Activity() {
 
     /** Shows a picker QR, waits for "Done" on the phone, then downloads the picks into the album. */
     private fun pick(albumId: String, albumName: String) {
-        stopSetup()
         val my = ++job
         panel(null, "", "Opening Google Photos picker…")
         thread {

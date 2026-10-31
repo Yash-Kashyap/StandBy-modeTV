@@ -1,111 +1,89 @@
 package com.yash.standbytv.gphotos
 
+import android.app.Activity
 import android.content.Context
-import com.yash.standbytv.BuildConfig
+import android.content.Intent
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.AuthorizationResult
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.Scope
+import com.google.android.gms.tasks.Tasks
 import com.yash.standbytv.Prefs
-import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /**
- * Google sign-in for TVs ("OAuth 2.0 for TV and limited-input devices"):
- * the TV shows a short code + QR, you approve on your phone, the TV gets a refresh token.
- * Only asks for the Photos Picker scope = access to photos you explicitly pick, nothing else.
+ * Google sign-in using the Google account already on the TV (Google Play services).
+ * Asks only for the Photos Picker permission = access to photos you explicitly pick.
+ *
+ * Google's "enter a code on your phone" TV sign-in does not support Google Photos, so this
+ * uses the Android authorization API instead. It needs an OAuth client of type "Android"
+ * (package com.yash.standbytv + the APK's SHA-1) in the Google Cloud project — no ID or
+ * secret inside the app.
  */
 object GoogleAuth {
     const val SCOPE = "https://www.googleapis.com/auth/photospicker.mediaitems.readonly"
-    private const val DEVICE_URL = "https://oauth2.googleapis.com/device/code"
-    private const val TOKEN_URL = "https://oauth2.googleapis.com/token"
+    const val REQUEST_CODE = 4711
 
-    // Client entered on the TV (via phone/PC web form) wins; a client built into the APK is the fallback.
-    fun clientId(ctx: Context): String =
-        Prefs(ctx).sp.getString("g_client_id", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.GOOGLE_CLIENT_ID
-    fun clientSecret(ctx: Context): String =
-        Prefs(ctx).sp.getString("g_client_secret", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.GOOGLE_CLIENT_SECRET
-    fun configured(ctx: Context): Boolean = clientId(ctx).isNotBlank() && clientSecret(ctx).isNotBlank()
+    private fun request() = AuthorizationRequest.builder().setRequestedScopes(listOf(Scope(SCOPE))).build()
 
-    /** Saves a client typed on a phone/PC. Changing it signs out of the old one. */
-    fun saveClient(ctx: Context, id: String, secret: String) {
-        val sp = Prefs(ctx).sp
-        if (sp.getString("g_client_id", null) != id) sp.edit().remove("g_refresh").remove("g_access").remove("g_exp").apply()
-        sp.edit().putString("g_client_id", id.trim()).putString("g_client_secret", secret.trim()).apply()
-    }
-
-    fun clearClient(ctx: Context) {
-        Prefs(ctx).sp.edit().remove("g_client_id").remove("g_client_secret")
-            .remove("g_refresh").remove("g_access").remove("g_exp").apply()
-    }
-
-    class DeviceCode(val deviceCode: String, val userCode: String, val verifyUrl: String, val intervalSec: Int, val expiresAt: Long)
-
-    sealed class Poll {
-        object Pending : Poll()
-        object SlowDown : Poll()
-        object Done : Poll()
-        class Failed(val reason: String) : Poll()
-    }
-
-    fun isSignedIn(ctx: Context) = !Prefs(ctx).sp.getString("g_refresh", null).isNullOrEmpty()
+    fun isSignedIn(ctx: Context) = Prefs(ctx).sp.getBoolean("g_signed_in", false)
 
     fun signOut(ctx: Context) {
-        val sp = Prefs(ctx).sp
-        sp.getString("g_refresh", null)?.let { tok ->
-            Thread { runCatching { Http.request("https://oauth2.googleapis.com/revoke", "POST", Http.form("token" to tok), "application/x-www-form-urlencoded") } }.start()
+        Prefs(ctx).sp.edit().remove("g_signed_in").remove("g_access").remove("g_exp").apply()
+    }
+
+    private fun save(ctx: Context, r: AuthorizationResult): Boolean {
+        val tok = r.accessToken ?: return false
+        Prefs(ctx).sp.edit().putBoolean("g_signed_in", true).putString("g_access", tok)
+            .putLong("g_exp", System.currentTimeMillis() + 50 * 60_000L).apply()
+        return true
+    }
+
+    /**
+     * Starts sign-in from [activity]. Shows Google's account/consent screen on the TV if needed;
+     * the result arrives in the activity's onActivityResult → pass it to [handleResult].
+     */
+    fun signIn(activity: Activity, onDone: () -> Unit, onError: (String) -> Unit) {
+        Identity.getAuthorizationClient(activity).authorize(request())
+            .addOnSuccessListener { r ->
+                if (r.hasResolution()) {
+                    try {
+                        activity.startIntentSenderForResult(r.pendingIntent!!.intentSender, REQUEST_CODE, null, 0, 0, 0)
+                    } catch (e: Exception) { onError(e.message ?: "Couldn't open Google sign-in") }
+                } else if (save(activity, r)) onDone() else onError("Google returned no access")
+            }
+            .addOnFailureListener { e -> onError(explain(e)) }
+    }
+
+    /** Call from onActivityResult. Returns null on success, or an error message. */
+    fun handleResult(activity: Activity, resultCode: Int, data: Intent?): String? {
+        if (resultCode != Activity.RESULT_OK || data == null) return "Sign-in was cancelled"
+        return try {
+            val r = Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(data)
+            if (save(activity, r)) null else "Google returned no access"
+        } catch (e: Exception) { explain(e) }
+    }
+
+    private fun explain(e: Exception): String {
+        val m = e.message ?: e.javaClass.simpleName
+        return when {
+            m.contains("10:") || m.contains("DEVELOPER_ERROR") ->
+                "Google doesn't recognise this app yet.\nCreate an \"Android\" OAuth client for com.yash.standbytv\nwith this APK's SHA-1 (see README)."
+            m.contains("7:") || m.contains("NETWORK") -> "No internet connection"
+            m.contains("16:") || m.contains("CANCELED") -> "Sign-in was cancelled"
+            else -> m
         }
-        sp.edit().remove("g_refresh").remove("g_access").remove("g_exp").apply()
     }
 
-    /** Step 1 (background thread): ask Google for a code to show on the TV. */
-    fun requestDeviceCode(ctx: Context): DeviceCode {
-        val r = Http.request(DEVICE_URL, "POST", Http.form("client_id" to clientId(ctx), "scope" to SCOPE), "application/x-www-form-urlencoded")
-        val j = JSONObject(r.body)
-        if (!r.ok) error(j.optString("error_description", j.optString("error", "HTTP ${r.code}")))
-        return DeviceCode(
-            j.getString("device_code"), j.getString("user_code"),
-            j.optString("verification_url", j.optString("verification_uri", "https://www.google.com/device")),
-            j.optInt("interval", 5), System.currentTimeMillis() + j.optInt("expires_in", 1800) * 1000L
-        )
-    }
-
-    /** Step 2 (background thread): poll until the user approves on their phone. */
-    fun poll(ctx: Context, dc: DeviceCode): Poll {
-        val r = Http.request(TOKEN_URL, "POST", Http.form(
-            "client_id" to clientId(ctx), "client_secret" to clientSecret(ctx), "device_code" to dc.deviceCode,
-            "grant_type" to "urn:ietf:params:oauth:grant-type:device_code"
-        ), "application/x-www-form-urlencoded")
-        val j = runCatching { JSONObject(r.body) }.getOrDefault(JSONObject())
-        if (r.ok) { save(ctx, j); return Poll.Done }
-        return when (j.optString("error")) {
-            "authorization_pending" -> Poll.Pending
-            "slow_down" -> Poll.SlowDown
-            "access_denied" -> Poll.Failed("Sign-in was declined")
-            "expired_token" -> Poll.Failed("The code expired — try again")
-            else -> Poll.Failed(j.optString("error_description", j.optString("error", "HTTP ${r.code}")))
-        }
-    }
-
-    private fun save(ctx: Context, j: JSONObject) {
-        val e = Prefs(ctx).sp.edit()
-        e.putString("g_access", j.getString("access_token"))
-        e.putLong("g_exp", System.currentTimeMillis() + (j.optLong("expires_in", 3600) - 60) * 1000)
-        if (j.has("refresh_token")) e.putString("g_refresh", j.getString("refresh_token"))
-        e.apply()
-    }
-
-    /** A valid access token, refreshing it if needed (background thread). */
+    /** A valid access token (background thread). Refreshes silently once consent was given. */
     fun accessToken(ctx: Context): String {
         val sp = Prefs(ctx).sp
         val tok = sp.getString("g_access", null)
         if (tok != null && System.currentTimeMillis() < sp.getLong("g_exp", 0)) return tok
-        val refresh = sp.getString("g_refresh", null) ?: error("Not signed in")
-        val r = Http.request(TOKEN_URL, "POST", Http.form(
-            "client_id" to clientId(ctx), "client_secret" to clientSecret(ctx),
-            "refresh_token" to refresh, "grant_type" to "refresh_token"
-        ), "application/x-www-form-urlencoded")
-        val j = JSONObject(r.body)
-        if (!r.ok) {
-            if (j.optString("error") == "invalid_grant") sp.edit().remove("g_refresh").apply()
-            error(j.optString("error_description", "Couldn't refresh Google sign-in"))
-        }
-        save(ctx, j)
-        return j.getString("access_token")
+        if (!isSignedIn(ctx)) error("Not signed in")
+        val r = Tasks.await(Identity.getAuthorizationClient(ctx).authorize(request()), 30, TimeUnit.SECONDS)
+        if (r.hasResolution()) { signOut(ctx); error("Please sign in with Google again") }
+        if (!save(ctx, r)) error("Google returned no access")
+        return sp.getString("g_access", null)!!
     }
 }
