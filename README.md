@@ -196,6 +196,15 @@ adb shell settings get secure enabled_notification_listeners  # contains com.yas
 - It won't start while **StandBy TV itself is open**, because it's already on screen.
 - It won't start on **live TV / HDMI inputs** on some TVs, because those count as "watching".
 
+### Starting it from a launcher (when the system screensaver is disabled)
+Some TVs ship with Android's own screensaver disabled or removed, so the steps above can't start StandBy TV on idle. Since v1.4.0 a launcher or automation app can start it directly instead:
+
+```bash
+adb shell am start -n com.yash.standbytv/.ScreensaverActivity
+```
+
+`ScreensaverActivity` shows the same screen as the screensaver (the "Screensaver shows" setting applies, with no hints). **Any remote button closes it**, except volume keys, and it also closes when you press Home or another app opens. A launcher only has to fire that intent after its own idle timer, so it can start StandBy TV inside any app, not just on the home screen.
+
 ### Optional: grant photo access without the pop-up
 ```bash
 adb shell pm grant com.yash.standbytv android.permission.READ_EXTERNAL_STORAGE
@@ -258,6 +267,7 @@ tools/setup-tv.sh      the same for macOS / Linux
 app/src/main/java/com/yash/standbytv/
   MainActivity.kt      full-screen app, keeps the screen on, sends remote keys to StandbyView
   StandbyDream.kt      screensaver (DreamService)
+  ScreensaverActivity.kt  same screen as an activity that a launcher can start; any key closes it
   StandbyView.kt       hosts the screens: D-pad, burn-in shift, night filter, auto-rotate
   SettingsActivity.kt  remote-friendly settings (white border on the focused row)
   WeatherRepo.kt       Open-Meteo + IP location + city search, cached for 30 min
